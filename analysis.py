@@ -1,6 +1,7 @@
 """Ensemble score-based diffusion on sklearn digits:
-arithmetic-mean score aggregation (baseline) vs. confidence-weighted aggregation (improved)."""
+arithmetic-mean score aggregation (baseline) vs. inverse-training-loss-weighted aggregation (improved)."""
 import json
+import os
 import sys
 import warnings
 
@@ -21,9 +22,8 @@ SEEDS = [42, 43, 44]          # ensemble training + sampling is randomized -> re
 N_MEMBERS = 5
 T = 100                       # diffusion steps (linear beta schedule)
 SAMPLER_STEPS = 25            # DDIM steps (eta = 0), same for both models
-N_GEN, N_PILOT, N_REAL = 1000, 200, 1000
+N_GEN, N_REAL = 1000, 1000
 N_PCA = 20
-TEMP = 0.05                   # softmax temperature on pilot confidence (fixed a priori, not tuned)
 URL = "https://scikit-learn.org/stable/datasets/toy_dataset.html"
 
 
@@ -100,6 +100,20 @@ def noise_mse(members, w, seed):
     return float(np.mean((ens_eps(members, w, xt, t) - eps) ** 2))
 
 
+def member_train_loss_weights(members, seed):
+    """Improved-model weights: inverse noise-prediction MSE of each member on the TRAINING set
+    (fixed random timesteps/noise per seed). No test data, no pilot sampling, no extra training.
+    Each member is scored with one forward pass over the training data, which is negligible cost."""
+    rng = np.random.default_rng(seed + 2000)
+    t = rng.integers(0, T, len(X_tr))
+    eps = rng.standard_normal(X_tr.shape)
+    xt = np.sqrt(abar[t])[:, None] * X_tr + np.sqrt(1 - abar[t])[:, None] * eps
+    inp = np.hstack([xt, t[:, None] / T])
+    mse = np.array([float(np.mean((m.predict(inp) - eps) ** 2)) for m in members])
+    inv = 1.0 / mse
+    return inv / inv.sum(), mse
+
+
 def mean_conf(samples):
     return float(clf.predict_proba(samples).max(1).mean())
 
@@ -111,14 +125,9 @@ for seed in SEEDS:
     log(f"seed {seed}: training {N_MEMBERS} members")
     members = train_ensemble(seed)
 
-    # Improved model only: pilot batch from each member alone -> confidence -> softmax weights
-    rng_p = np.random.default_rng(seed + 1000)
-    conf = np.array([mean_conf(sample(members, np.eye(N_MEMBERS)[k], N_PILOT, rng_p))
-                     for k in range(N_MEMBERS)])
-    e = np.exp((conf - conf.max()) / TEMP)
-    w_imp = e / e.sum()
     w_base = np.full(N_MEMBERS, 1.0 / N_MEMBERS)
-    log(f"seed {seed}: pilot confidences={np.round(conf, 3).tolist()} weights={np.round(w_imp, 3).tolist()}")
+    w_imp, train_mse = member_train_loss_weights(members, seed)
+    log(f"seed {seed}: train MSE={np.round(train_mse, 4).tolist()} weights={np.round(w_imp, 3).tolist()}")
 
     # Identical initial noise for both aggregation rules
     xb = sample(members, w_base, N_GEN, np.random.default_rng(seed))
@@ -151,13 +160,13 @@ out = {
 }
 
 results = {
-    "question": "Can weighting ensemble members of a small score-based diffusion model by a "
-                "perceptual-quality proxy, rather than by score-matching loss, lower the Frechet "
-                "distance of generated samples relative to the arithmetic-mean ensemble?",
+    "question": "Can weighting ensemble members of a small score-based diffusion model by their "
+                "training-set score-matching loss lower the Frechet distance of generated samples "
+                "relative to the arithmetic-mean ensemble?",
     "method": "Five-member MLP noise-prediction ensemble, DDIM-style sampler; baseline averages "
-              "member scores uniformly, improved uses softmax weights over pilot-batch digit-classifier "
-              "confidence. Frechet distance in a PCA feature space fitted on training data. "
-              "Seeds 42, 43, 44.",
+              "member scores uniformly; improved weights each member by inverse noise-prediction MSE "
+              "measured on the training set (no pilot sampling, no extra training). Frechet distance "
+              "in a PCA feature space fitted on training data. Seeds 42, 43, 44.",
     "dataset": {
         "name": "scikit-learn digits (load_digits)", "source_url": URL,
         "n_rows": int(len(X)), "n_train": int(len(X_tr)), "n_test": int(len(X_te)),
@@ -166,25 +175,27 @@ results = {
     "metric_name": "Frechet distance (20-D PCA feature space, lower is better)",
     "higher_is_better": False,
     "baseline": "Arithmetic-mean deep-ensemble score model (uniform member weights).",
-    "improved": "Same members, sampler and seeds; member weights = softmax of pilot-batch "
-                "digit-classifier confidence; weighted mean of scores.",
+    "improved": "Same members, sampler and seeds; member weights proportional to 1/MSE of each "
+                "member's noise prediction on the training set; weighted mean of scores.",
     "metrics": out,
     "notes": f"Test set has {len(X_te)} digits, so the real reference set uses all of them rather than "
              "1,000. Frechet distance is computed on PCA features, not Inception features, so values are "
              "not comparable to FID in the paper. Only three seeds; std is across seeds. The improved "
-             "model spends extra compute on pilot sampling (not matched in budget). Hyper-parameters "
-             "were fixed a priori; nothing was tuned or selected on the test set. The classifier and PCA "
-             "use training data only. Results are from a small toy setting.",
+             "weighting uses only training data and adds one forward pass per member (no pilot sampling), "
+             "so sampling compute is identical to the baseline. Weights are based on in-sample training "
+             "loss, which may favour members that fit the training set more closely. The weighting rule "
+             "was fixed a priori (inverse MSE); nothing was tuned or selected on the test set. "
+             "The classifier and PCA use training data only. Results are from a small toy setting; "
+             "the reported improvement is whatever the run produced and may be negative.",
 }
 with open("results.json", "w", encoding="utf-8") as f:
     json.dump(results, f, indent=2, ensure_ascii=False)
 log("wrote results.json")
 
 # ---------- optional chart ----------
-import os
 os.makedirs("figures", exist_ok=True)
 fig, ax = plt.subplots(figsize=(4, 3.5))
-ax.bar(["baseline\n(mean)", "improved\n(weighted)"],
+ax.bar(["baseline\n(mean)", "improved\n(inv-loss)"],
        [out["baseline_score"], out["improved_score"]],
        yerr=[out["baseline_score_std"], out["improved_score_std"]], capsize=5,
        color=["grey", "steelblue"])

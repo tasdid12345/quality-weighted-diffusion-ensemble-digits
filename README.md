@@ -1,21 +1,33 @@
-# Confidence-Weighted Score Ensembles for Small Diffusion Models
+# Digits ensemble diffusion: loss-weighted vs. mean score aggregation
 
-Motivation: "When Are Two Scores Better Than One? Investigating Ensembles of Diffusion Models" studies how to aggregate the scores of ensembles of score-based diffusion models, and reports that the arithmetic mean is a strong default. This experiment asks whether a different aggregation rule can do better on a much smaller problem.
+## Question
+Can weighting ensemble members of a small score-based diffusion model by their
+training-set score-matching loss lower the Frechet distance (PCA-20 feature space)
+of generated digits relative to the uniform-mean ensemble?
 
-Question: Can weighting ensemble members of a small score-based diffusion model by a perceptual-quality proxy, rather than by score-matching loss, lower the Fréchet distance of generated samples relative to the arithmetic-mean ensemble?
+## Method
+- Data: scikit-learn `load_digits` (1797 rows), scaled to [0,1], stratified 70/30 split (seed 42).
+  Test set is never used for fitting, weighting or selection.
+- Shared: 5 MLP noise-prediction members per seed (seeds 42, 43, 44), linear beta schedule
+  with T=100, DDIM-style sampler (eta=0, 25 steps), PCA(20) fitted on training data.
+- Baseline: uniform average of member noise predictions (scores).
+- Improved: weights proportional to 1/MSE of each member's noise prediction on the training set.
+  No pilot sampling and no additional training, so sampling cost matches the baseline.
+- Metric: Frechet distance between Gaussians fitted to PCA features of 1000 generated samples
+  and the test digits (lower is better). Mean and std reported over three seeds.
 
-Dataset: scikit-learn's bundled digits dataset (load_digits), scaled to [0,1] and split once with a stratified, seeded train/test split. This is not the paper's dataset (the paper uses FFHQ-256).
+## Run
+```
+pip install -r requirements.txt
+python analysis.py
+```
+Writes `results.json` and `figures/fd_comparison.png`.
 
-Baseline: a DDPM-style ensemble of small scikit-learn MLP noise predictors, sampled with a DDIM-style deterministic sampler and combined by the arithmetic mean of member scores.
-
-Improved model: identical members, sampler, seeds and step count. Each member's weight is a softmax over the mean digit-classifier confidence of a pilot batch drawn from that member alone, and the weighted mean of scores is used.
-
-How to run:
-
-    pip install -r requirements.txt
-    python analysis.py
-
-Results: results are written to results.json (and a chart to figures/).
+## Caveats
+- Toy setting; PCA-Frechet distance is not comparable to FID.
+- Weights come from in-sample training loss and may favour members that overfit less or more;
+  the sign of the effect is not guaranteed.
+- Only three seeds, so the standard deviation is wide relative to small differences.
 
 ## Reference
 
