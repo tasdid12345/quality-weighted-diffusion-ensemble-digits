@@ -1,0 +1,29 @@
+{
+  "question": "Can weighting ensemble members of a small score-based diffusion model by a perceptual-quality proxy, rather than by score-matching loss, lower the Frechet distance of generated samples relative to the arithmetic-mean ensemble?",
+  "method": "Five-member MLP noise-prediction ensemble, DDIM-style sampler; baseline averages member scores uniformly, improved uses softmax weights over pilot-batch digit-classifier confidence. Frechet distance in a PCA feature space fitted on training data. Seeds 42, 43, 44.",
+  "dataset": {
+    "name": "scikit-learn digits (load_digits)",
+    "source_url": "https://scikit-learn.org/stable/datasets/toy_dataset.html",
+    "n_rows": 1797,
+    "n_train": 1257,
+    "n_test": 540,
+    "same_as_paper": false,
+    "baseline_is_papers_method": false
+  },
+  "metric_name": "Frechet distance (20-D PCA feature space, lower is better)",
+  "higher_is_better": false,
+  "baseline": "Arithmetic-mean deep-ensemble score model (uniform member weights).",
+  "improved": "Same members, sampler and seeds; member weights = softmax of pilot-batch digit-classifier confidence; weighted mean of scores.",
+  "metrics": {
+    "baseline_score": 1.9595661217735063,
+    "improved_score": 1.9673533367825549,
+    "baseline_score_std": 0.12641897941217417,
+    "improved_score_std": 0.1174254288168501,
+    "improvement": -0.007787215009048554,
+    "baseline_mean_confidence": 0.49823997771968137,
+    "improved_mean_confidence": 0.5033503239351639,
+    "baseline_noise_mse": 0.1323202744518569,
+    "improved_noise_mse": 0.13280136767891848
+  },
+  "notes": "Test set has 540 digits, so the real reference set uses all of them rather than 1,000. Frechet distance is computed on PCA features, not Inception features, so values are not comparable to FID in the paper. Only three seeds; std is across seeds. The improved model spends extra compute on pilot sampling (not matched in budget). Hyper-parameters were fixed a priori; nothing was tuned or selected on the test set. The classifier and PCA use training data only. Results are from a small toy setting."
+}
